@@ -1,3 +1,46 @@
+# Shared backend env vars — populated from Dokploy's Environment tab via ${VAR} substitution.
+# Using a YAML anchor instead of env_file so all four Python services stay in sync
+# without needing a physical .env file to exist inside the cloned repo.
+x-backend-env: &backend-env
+  ENVIRONMENT: ${ENVIRONMENT}
+  SECRET_KEY: ${SECRET_KEY}
+  DB_NAME: ${DB_NAME}
+  DB_USER: ${DB_USER}
+  DB_PASSWORD: ${DB_PASSWORD}
+  DB_PORT: ${DB_PORT}
+  REDIS_PORT: ${REDIS_PORT}
+  REDIS_DB: ${REDIS_DB}
+  REDIS_PASSWORD: ${REDIS_PASSWORD}
+  API_PORT: ${API_PORT}
+  API_BASE_URL: ${API_BASE_URL}
+  FRONTEND_URL: ${FRONTEND_URL}
+  CORS_ORIGINS: ${CORS_ORIGINS}
+  RESEND_API_KEY: ${RESEND_API_KEY}
+  EMAIL_FROM_ADDRESS: ${EMAIL_FROM_ADDRESS}
+  EMAIL_FROM_NAME: ${EMAIL_FROM_NAME}
+  SENTRY_ENABLED: ${SENTRY_ENABLED}
+  SENTRY_DSN: ${SENTRY_DSN}
+  SENTRY_ENV: ${SENTRY_ENV}
+  SENTRY_SAMPLES_RATE: ${SENTRY_SAMPLES_RATE}
+  ADMIN_EMAIL: ${ADMIN_EMAIL}
+  ADMIN_PASSWORD: ${ADMIN_PASSWORD}
+  AWS_BUCKET_NAME: ${AWS_BUCKET_NAME}
+  AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+  AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+  AWS_REGION: ${AWS_REGION}
+  SYNC_INTERVAL_SECONDS: ${SYNC_INTERVAL_SECONDS}
+  SLEEP_SCORE_INTERVAL_SECONDS: ${SLEEP_SCORE_INTERVAL_SECONDS}
+  RESILIENCE_SCORE_INTERVAL_SECONDS: ${RESILIENCE_SCORE_INTERVAL_SECONDS}
+  HISTORICAL_SYNC_ON_CONNECT: ${HISTORICAL_SYNC_ON_CONNECT}
+  SVIX_SERVER_URL: ${SVIX_SERVER_URL}
+  GARMIN_CLIENT_ID: ${GARMIN_CLIENT_ID}
+  GARMIN_CLIENT_SECRET: ${GARMIN_CLIENT_SECRET}
+  SUUNTO_CLIENT_ID: ${SUUNTO_CLIENT_ID}
+  SUUNTO_CLIENT_SECRET: ${SUUNTO_CLIENT_SECRET}
+  SUUNTO_SUBSCRIPTION_KEY: ${SUUNTO_SUBSCRIPTION_KEY}
+  POLAR_CLIENT_ID: ${POLAR_CLIENT_ID}
+  POLAR_CLIENT_SECRET: ${POLAR_CLIENT_SECRET}
+
 services:
   db:
     image: postgres:18
@@ -5,9 +48,9 @@ services:
     environment:
       POSTGRES_DB: open-wearables
       POSTGRES_USER: open-wearables
-      POSTGRES_PASSWORD: open-wearables
-    ports:
-      - "${DB_PORT:-5432}:5432"
+      POSTGRES_PASSWORD: ${DB_PASSWORD}   # CHANGED: use your real password, not the "open-wearables" default
+    # REMOVED ports: — no need to expose Postgres to the host at all;
+    # app/celery reach it over the internal compose network by service name "db".
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U open-wearables -d open-wearables"]
       interval: 5s
@@ -16,117 +59,78 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql
       - ./backend/scripts/init/create-svix-db.sql:/docker-entrypoint-initdb.d/create-svix-db.sql:ro
+    restart: unless-stopped   # ADDED
 
   app:
     build:
-        context: ./backend
-        dockerfile: Dockerfile
+      context: ./backend
+      dockerfile: Dockerfile   # CHANGED: production Dockerfile, not Dockerfile.dev-equivalent
     container_name: backend__open-wearables
     image: open-wearables-platform:latest
     pull_policy: never
     command: scripts/start/app.sh
-    env_file:
-      - ./backend/config/.env
-    environment:
-      - DB_HOST=db
-      - REDIS_HOST=redis
-    ports:
-      - "${API_PORT:-8000}:8000"
+    environment:              # CHANGED: was env_file, now merged from the anchor above
+      <<: *backend-env
+      DB_HOST: db
+      REDIS_HOST: redis
+    expose:
+      - "8000"                # CHANGED: was ports (host-published); Dokploy's domain routing reaches
+                               # this over the internal network, no need to publish on the host
     depends_on:
       db:
         condition: service_healthy
       redis:
         condition: service_started
-    develop:
-      watch:
-        - action: sync
-          path: ./backend/app
-          target: /root_project/app
-        - action: sync+restart
-          path: ./backend/migrations
-          target: /root_project/migrations
-        - action: sync+restart
-          path: ./backend/config/.env
-          target: /root_project/config/.env
-        - action: sync
-          path: ./backend/scripts
-          target: /root_project/scripts
-        - action: sync
-          path: ./backend/tests
-          target: /root_project/tests
-        - action: rebuild
-          path: ./backend/uv.lock
-    restart: on-failure
+    restart: unless-stopped   # CHANGED from on-failure
+    # REMOVED develop: watch: block — dev-only hot-reload feature, not used by `docker compose up`
 
   celery-worker:
     container_name: celery-worker__open-wearables
     image: open-wearables-platform:latest
     pull_policy: never
     command: scripts/start/worker.sh
-    env_file:
-      - ./backend/config/.env
     environment:
-      - DB_HOST=db
-      - REDIS_HOST=redis
+      <<: *backend-env
+      DB_HOST: db
+      REDIS_HOST: redis
     depends_on:
       - redis
       - db
       - app
-    develop:
-      watch:
-        - action: sync+restart
-          path: ./backend/app
-          target: /root_project/app
-        - action: sync
-          path: ./backend/scripts
-          target: /root_project/scripts
+    restart: unless-stopped   # ADDED
 
   celery-beat:
     container_name: celery-beat__open-wearables
     image: open-wearables-platform:latest
     pull_policy: never
     command: scripts/start/beat.sh
-    env_file:
-      - ./backend/config/.env
     environment:
-      - DB_HOST=db
-      - REDIS_HOST=redis
+      <<: *backend-env
+      DB_HOST: db
+      REDIS_HOST: redis
     depends_on:
       - redis
       - db
       - app
-    develop:
-      watch:
-        - action: sync+restart
-          path: ./backend/app
-          target: /root_project/app
-        - action: sync
-          path: ./backend/scripts
-          target: /root_project/scripts
+    restart: unless-stopped   # ADDED
 
   flower:
     container_name: flower__open-wearables
     image: open-wearables-platform:latest
     pull_policy: never
     command: scripts/start/flower.sh
-    env_file:
-      - ./backend/config/.env
     environment:
-      - DB_HOST=db
-      - REDIS_HOST=redis
-    ports:
-      - "${FLOWER_PORT:-5555}:5555"
+      <<: *backend-env
+      DB_HOST: db
+      REDIS_HOST: redis
+    # REMOVED ports: — keep Flower internal-only; it's a monitoring dashboard with no auth by default,
+    # not something to expose publicly. If you want to check it, use Dokploy's container terminal
+    # or a temporary SSH tunnel instead of a public domain.
     depends_on:
       - redis
       - db
       - app
-    develop:
-      watch:
-        - action: sync
-          path: ./backend
-          target: /root_project
-          ignore:
-            - .venv/
+    restart: unless-stopped   # ADDED
 
   redis:
     container_name: redis__open-wearables
@@ -135,8 +139,6 @@ services:
       - sh
       - -c
       - |
-        # Seed AOF from an existing RDB before enabling it, otherwise Redis boots
-        # empty and ignores dump.rdb. Skipped once appendonlydir exists.
         if [ ! -d /data/appendonlydir ] && [ -f /data/dump.rdb ]; then
           redis-server --daemonize no &
           RPID=$$!
@@ -148,10 +150,10 @@ services:
           wait "$$RPID" 2>/dev/null
         fi
         exec redis-server --appendonly yes --appendfsync everysec
-    ports:
-      - "${REDIS_PORT:-6379}:6379"
+    # REMOVED ports: — internal only, reached via "redis" service name
     volumes:
       - redis_data:/data
+    restart: unless-stopped   # ADDED
 
   svix-server:
     container_name: svix-server__open-wearables
@@ -165,15 +167,13 @@ services:
         exec svix-server "$$@"
       - --
     command: ["--run-migrations"]
-    env_file:
-      - ./backend/config/.env
-    environment:
-      SVIX_DB_DSN: "postgresql://${DB_USER:-open-wearables}:${DB_PASSWORD:-open-wearables}@${DB_HOST:-db}:${DB_PORT:-5432}/svix"
+    environment:               # CHANGED: was env_file, now merged from the anchor above
+      <<: *backend-env
+      SVIX_DB_DSN: "postgresql://${DB_USER:-open-wearables}:${DB_PASSWORD}@db:5432/svix"
       SVIX_QUEUE_TYPE: "redis"
       SVIX_REDIS_DSN: "redis://redis:6379/1"
       SVIX_CACHE_TYPE: "redis"
-    ports:
-      - "${SVIX_PORT:-8071}:8071"
+    # REMOVED ports: — internal only, app reaches it via SVIX_SERVER_URL=http://svix-server:8071
     depends_on:
       db:
         condition: service_healthy
@@ -185,39 +185,23 @@ services:
       timeout: 3s
       retries: 20
       start_period: 10s
-    restart: on-failure
+    restart: unless-stopped   # CHANGED from on-failure
 
   frontend:
     build:
       context: ./frontend
-      dockerfile: Dockerfile.dev
+      dockerfile: Dockerfile        # CHANGED: production Dockerfile, not Dockerfile.dev
+      args:
+        VITE_API_URL: ${VITE_API_URL}  # CHANGED: Vite bakes this in at build time, not via env_file at runtime
     container_name: frontend__open-wearables
-    image: open-wearables-frontend:dev
+    image: open-wearables-frontend:latest   # CHANGED from :dev
     pull_policy: never
-    env_file:
-      # .env.example supplies the defaults; .env overrides it when present.
-      - ./frontend/.env.example
-      - path: ./frontend/.env
-        required: false
-    ports:
-      - "${FRONTEND_PORT:-3000}:3000"
+    expose:
+      - "3000"               # CHANGED: was ports; routed via Dokploy domain instead
     depends_on:
       - app
-    develop:
-      watch:
-        - action: sync
-          path: ./frontend/src
-          target: /app/src
-        - action: sync
-          path: ./frontend/public
-          target: /app/public
-        - action: rebuild
-          path: ./frontend/package.json
-        - action: rebuild
-          path: ./frontend/pnpm-lock.yaml
-        - action: rebuild
-          path: ./frontend/vite.config.ts
-    restart: on-failure
+    restart: unless-stopped   # CHANGED from on-failure
+    # REMOVED env_file: (.env.example + .env) and develop: watch: — dev-only mechanisms
 
 volumes:
   postgres_data:
