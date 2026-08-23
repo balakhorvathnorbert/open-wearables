@@ -42,6 +42,7 @@ x-backend-env: &backend-env
   STRAVA_CLIENT_SECRET: ${STRAVA_CLIENT_SECRET:-2f664ccc8b256f4a73803ef0cdf5975a1b8905d9}
   STRAVA_DEFAULT_SCOPE: ${STRAVA_DEFAULT_SCOPE:-activity:read_all}
   STRAVA_WEBHOOK_VERIFY_TOKEN: ${STRAVA_WEBHOOK_VERIFY_TOKEN:-NaturTrak2025TermvedHun}
+  POLAR_REDIRECT_URI: ${POLAR_REDIRECT_URI:-https://ow-api.naturtrak.eu/api/v1/oauth/polar/callback}
 
 services:
   db:
